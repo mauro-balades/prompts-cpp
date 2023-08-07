@@ -1,0 +1,1 @@
+clang-format-14 src/prompts.h -i -style=file
