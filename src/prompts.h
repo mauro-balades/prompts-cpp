@@ -52,7 +52,7 @@ namespace symbols {
   const std::string radioOn = "◉";
   const std::string radioOff = "◯";
   const std::string tick = "✔";	
-  const std::string cross = "✖";	
+  const std::string cross = "×";	
   const std::string ellipsis = "…";	
   const std::string pointerSmall = "›";	
   const std::string line = "─";	
@@ -61,13 +61,13 @@ namespace symbols {
 }
 
 namespace _internal {
-void printPrompt(const std::string& message, bool complete = false, bool coloredMessage = true) {
+void printPrompt(const std::string& message, bool complete = false, bool coloredMessage = false) {
     if (complete) std::cout << colors::bgreen << " " << symbols::tick << "  " << colors::reset;
     else std::cout << colors::bgrey << " ? " << colors::reset;
-    if (coloredMessage) std::cout << colors::blue << colors::underline << message << colors::reset;
-    else std::cout << message;
+    std::cout << message;
     if (complete) std::cout << colors::grey << symbols::ellipsis << " " << colors::reset;
     else std::cout << colors::grey << symbols::pointerSmall << " " << colors::reset;
+    if (coloredMessage) std::cout << colors::blue << colors::underline;
 }
 
 void clearLine(int lines = 0) {
@@ -81,6 +81,19 @@ static inline std::string ltrim(std::string &s) {
         return !std::isspace(ch);
     }));
     return copy;
+}
+
+static inline void moveCursorUp(int lines = 1) {
+    for (int i = 0; i < lines; i++) 
+        std::cout << "\x1b[A";
+}
+
+static inline void saveCursorPos() {
+    std::cout << "\x1b[s";
+}
+
+static inline void restoreCursorPos() {
+    std::cout << "\x1b[u";
 }
 
 } // namespace _internal
@@ -104,17 +117,31 @@ prompt(const std::string& message, const std::string& default_value = "", std::f
     std::getline(std::cin, input);
 
     if (_internal::ltrim(input).empty()) input = default_value;
+    bool hadError = false;
     std::string error = validator(input);
-    if (!error.empty()) {
+    while (!error.empty()) {
         _internal::clearLine();
-        std::cout << colors::bred << " ✘ " << colors::reset << error << std::endl;
-        return prompt<type>(message, default_value, validator);
+        _internal::printPrompt(message, false);
+        _internal::saveCursorPos();
+        std::cout << "\n" << colors::bred << "  " << symbols::cross << " " << error << colors::reset << "\n";
+        _internal::restoreCursorPos();
+        if (!hadError) _internal::moveCursorUp();
+        hadError = true;
+        std::getline(std::cin, input);
+        if (_internal::ltrim(input).empty()) input = default_value;
+        error = validator(input);
     }
 
     _internal::clearLine();
     _internal::printPrompt(message, true);
     std::cout << input << std::endl;
     return input;
+}
+
+template <PromptType type = PromptType::Text>
+typename std::enable_if<type == PromptType::Text, std::string>::type
+prompt(const std::string& message, std::function<std::string(const std::string&)> validator) {
+    return prompt<type>(message, "", validator);
 }
 
 }; // namespace cpp_prompt
