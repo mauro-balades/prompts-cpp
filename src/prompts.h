@@ -5,6 +5,8 @@
 #include <string>
 #include <iostream>
 #include <functional>
+#include <termios.h>
+#include <unistd.h>
 
 namespace cpp_prompt {
 
@@ -63,7 +65,7 @@ namespace symbols {
 namespace _internal {
 void printPrompt(const std::string& message, bool complete = false, bool coloredMessage = false) {
     if (complete) std::cout << colors::bgreen << " " << symbols::tick << "  " << colors::reset;
-    else std::cout << colors::bgrey << " ? " << colors::reset;
+    else std::cout << colors::bgrey << "? " << colors::reset;
     std::cout << message;
     if (complete) std::cout << colors::grey << symbols::ellipsis << " " << colors::reset;
     else std::cout << colors::grey << symbols::pointerSmall << " " << colors::reset;
@@ -88,12 +90,53 @@ static inline void moveCursorUp(int lines = 1) {
         std::cout << "\x1b[A";
 }
 
+static inline void moveCursorDown(int lines = 1) {
+    for (int i = 0; i < lines; i++) 
+        std::cout << "\033[1B";
+}
+
+static inline void moveCursorLeft(int lines = 1) {
+    for (int i = 0; i < lines; i++) 
+        std::cout << "\x1b[D";
+}
+
+static inline void moveCursorRight(int lines = 1) {
+    for (int i = 0; i < lines; i++) 
+        std::cout << "\x1b[C";
+}
+
 static inline void saveCursorPos() {
     std::cout << "\x1b[s";
 }
 
 static inline void restoreCursorPos() {
     std::cout << "\x1b[u";
+}
+
+inline void hideCursor()
+{
+    std::cout << "\033[?25l";
+}
+
+inline void showCursor()
+{
+    std::cout << "\033[?25h";
+}
+
+struct termios orig_termios;
+inline void rawModeOff()
+{
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+    showCursor();
+}
+inline void rawModeOn()
+{
+    tcgetattr(STDIN_FILENO, &orig_termios);
+    atexit(rawModeOff);
+    struct termios raw = orig_termios;
+    raw.c_lflag &= ~(ECHO | ICANON);
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+    hideCursor();
 }
 
 } // namespace _internal
@@ -114,18 +157,20 @@ typename std::enable_if<type == PromptType::Text, std::string>::type
 prompt(const std::string& message, const std::string& default_value = "", std::function<std::string(const std::string&)> validator = [](const std::string&){ return ""; }) {
     _internal::printPrompt(message);
     std::string input;
+    _internal::saveCursorPos();
     std::getline(std::cin, input);
 
     if (_internal::ltrim(input).empty()) input = default_value;
     bool hadError = false;
     std::string error = validator(input);
     while (!error.empty()) {
+        _internal::moveCursorDown();
         _internal::clearLine();
-        _internal::printPrompt(message, false);
-        _internal::saveCursorPos();
-        std::cout << "\n" << colors::bred << "  " << symbols::cross << " " << error << colors::reset << "\n";
+        _internal::clearLine();
+        _internal::printPrompt(message);
+        std::cout << std::endl;
+        std::cout << " " << colors::bred << symbols::cross << " " << error << std::endl;
         _internal::restoreCursorPos();
-        if (!hadError) _internal::moveCursorUp();
         hadError = true;
         std::getline(std::cin, input);
         if (_internal::ltrim(input).empty()) input = default_value;
@@ -134,7 +179,7 @@ prompt(const std::string& message, const std::string& default_value = "", std::f
 
     _internal::clearLine();
     _internal::printPrompt(message, true);
-    std::cout << input << std::endl;
+    std::cout << input << colors::reset << std::endl;
     return input;
 }
 
@@ -143,6 +188,70 @@ typename std::enable_if<type == PromptType::Text, std::string>::type
 prompt(const std::string& message, std::function<std::string(const std::string&)> validator) {
     return prompt<type>(message, "", validator);
 }
+
+template <PromptType type>
+typename std::enable_if<type == PromptType::Password, std::string>::type
+prompt(const std::string& message, const std::string mask = "*", bool required = true) {
+    char c;
+    bool hadError = false;
+
+    // we type "*" as the user tpes characters to make the password hidden
+    _internal::printPrompt(message);
+    std::string input;
+    _internal::saveCursorPos();
+
+    // disable writing to the console
+    _internal::rawModeOn();
+    while ((c = std::getchar())) {
+        if (c == 127) {
+            if (!input.empty()) {
+                input.pop_back();
+                _internal::moveCursorLeft();
+                std::cout << " ";
+                _internal::moveCursorLeft();
+            }
+        } else if (c == '\n') {
+            if (required && _internal::ltrim(input).empty()) {
+                if (!hadError) {
+                    hadError = true;
+                    _internal::rawModeOff();
+                    _internal::saveCursorPos();
+                    std::cout << std::endl;
+                    std::cout << " " << symbols::pointerSmall << colors::bred << " " << "This field is required" << std::endl;
+                    _internal::restoreCursorPos();
+                    _internal::rawModeOn();
+                }
+                continue;
+            }
+            break;
+        } else {
+            input += c;
+            std::cout << mask;
+        }
+    }
+
+    // enable writing to the console
+    _internal::rawModeOff();
+    std::cout << std::endl;
+    if (hadError) {
+        _internal::moveCursorDown();
+        _internal::clearLine(2);
+    } else {
+        _internal::clearLine();
+    }
+    _internal::printPrompt(message, true, true);
+    for (int i = 0; i < input.length(); i++)
+        std::cout << mask;
+    std::cout << colors::reset << std::endl;
+    return input;
+}
+
+template <PromptType type>
+typename std::enable_if<type == PromptType::Password, std::string>::type
+prompt(const std::string& message, bool required) {
+    return prompt<type>(message, "*", required);
+}
+
 
 }; // namespace cpp_prompt
 
