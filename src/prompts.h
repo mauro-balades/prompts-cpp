@@ -133,6 +133,7 @@ inline void rawModeOn()
 {
     tcgetattr(STDIN_FILENO, &orig_termios);
     atexit(rawModeOff);
+    atexit(showCursor);
     struct termios raw = orig_termios;
     raw.c_lflag &= ~(ECHO | ICANON);
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
@@ -141,19 +142,7 @@ inline void rawModeOn()
 
 } // namespace _internal
 
-enum PromptType { 
-    Text,
-    Number,
-    Password,
-    Confirm,
-    List,
-    MultiList,
-    Select,
-    MultiSelect,
-};
-
-template <PromptType type = PromptType::Text>
-typename std::enable_if<type == PromptType::Text, std::string>::type
+std::string
 prompt(const std::string& message, const std::string& default_value = "", std::function<std::string(const std::string&)> validator = [](const std::string&){ return ""; }) {
     _internal::printPrompt(message);
     std::string input;
@@ -183,14 +172,12 @@ prompt(const std::string& message, const std::string& default_value = "", std::f
     return input;
 }
 
-template <PromptType type = PromptType::Text>
-typename std::enable_if<type == PromptType::Text, std::string>::type
+std::string
 prompt(const std::string& message, std::function<std::string(const std::string&)> validator) {
-    return prompt<type>(message, "", validator);
+    return prompt(message, "", validator);
 }
 
-template <PromptType type>
-typename std::enable_if<type == PromptType::Password, std::string>::type
+std::string
 prompt(const std::string& message, const std::string mask = "*", bool required = true) {
     char c;
     bool hadError = false;
@@ -217,7 +204,7 @@ prompt(const std::string& message, const std::string mask = "*", bool required =
                     _internal::rawModeOff();
                     _internal::saveCursorPos();
                     std::cout << std::endl;
-                    std::cout << " " << symbols::pointerSmall << colors::bred << " " << "This field is required" << std::endl;
+                    std::cout << " " << symbols::pointerSmall << colors::bred << " This field is required" << std::endl;
                     _internal::restoreCursorPos();
                     _internal::rawModeOn();
                 }
@@ -246,10 +233,105 @@ prompt(const std::string& message, const std::string mask = "*", bool required =
     return input;
 }
 
-template <PromptType type>
-typename std::enable_if<type == PromptType::Password, std::string>::type
+std::string
 prompt(const std::string& message, bool required) {
-    return prompt<type>(message, "*", required);
+    return prompt(message, "*", required);
+}
+
+template <typename retTy = int>
+retTy promptNumber(const std::string& message, int default_value = 0, std::function<std::string(int)> validator = [](int){ return ""; }) {
+    _internal::printPrompt(message);
+    std::string input;
+    char c;
+    bool hadError = false;
+    _internal::rawModeOn();
+    auto checkInput = [&]() {
+        auto validatorError = input.empty() ? "" : validator(std::stoi(input));
+        if (!validatorError.empty()) {
+            if (!hadError) {
+                hadError = true;
+                _internal::rawModeOff();
+                _internal::saveCursorPos();
+                std::cout << std::endl;
+                std::cout << " " << symbols::pointerSmall << colors::bred << " " << validatorError << std::endl;
+                _internal::restoreCursorPos();
+                _internal::moveCursorUp(2);
+                _internal::rawModeOn();
+            }
+        } else {
+            hadError = false;
+            _internal::saveCursorPos();
+            _internal::moveCursorDown();
+            _internal::clearLine(2);
+            _internal::restoreCursorPos();
+        }
+    };
+
+    while ((c = std::getchar())) {
+        if (c == 127) {
+            if (!input.empty()) {
+                input = input.erase(input.length() - 1);
+                _internal::moveCursorLeft();
+                std::cout << " ";
+                _internal::moveCursorLeft();
+                checkInput();
+            }
+        } else if (c == '\n') {
+            if (!hadError)
+                break;
+        } else if (c >= '0' && c <= '9') {
+            if (input.size() == 10) continue;
+            input.append(1, c);
+            std::cout << c;
+            checkInput();
+        }
+
+        // up and down arrows
+        else if (c == '\033') {
+            std::getchar();
+            if (input.empty()) input = "0";
+            switch (std::getchar()) {
+                case 'A': // up arrow
+                    input = std::to_string(std::stoi(input) + 1);
+                    std::cout << "\033[1A";
+                    _internal::moveCursorDown(2);
+                    _internal::clearLine();
+                    _internal::printPrompt(message);
+                    std::cout << input;
+                    checkInput();
+                    break;
+                case 'B': // down arrow
+                    if (std::stoi(input) != 0) {
+                        input = std::to_string(std::stoi(input) - 1);
+                        std::cout << "\033[1A";
+                        _internal::moveCursorDown(2);
+                        _internal::clearLine();
+                        _internal::printPrompt(message);
+                        std::cout << input;
+                        checkInput();
+                    }
+                    break;
+            }
+        }
+    }
+
+    _internal::rawModeOff();
+    std::cout << std::endl;
+    if (hadError) {
+        _internal::moveCursorDown();
+        _internal::clearLine(2);
+    } else {
+        _internal::clearLine();
+    }
+    _internal::printPrompt(message, true);
+    std::cout << input << colors::reset << std::endl;
+    std::cout << colors::reset << std::endl;
+    return std::stoi(input);
+}
+
+template <typename retTy = int>
+retTy promptNumber(const std::string& message, std::function<std::string(int)> validator) {
+    return promptNumber<retTy>(message, 0, validator);
 }
 
 
